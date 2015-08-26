@@ -13,17 +13,18 @@ TARGET_OBJ_FILES := main.o \
 TARGET_OBJ_PATHS := $(addprefix $(TARGET_DIR)/,$(TARGET_OBJ_FILES))
 
 TOOLCHAIN_PREFIX ?= xtensa-lx106-elf-
-XTENSA_TOOCHAIN := ../xtensa-lx106-elf/bin
-CC := $(TOOLCHAIN_PREFIX)gcc
-AR := $(TOOLCHAIN_PREFIX)ar
-LD := $(TOOLCHAIN_PREFIX)gcc
+XTENSA_TOOCHAIN := sdk/xtensa-lx106-elf
+CC := $(XTENSA_TOOCHAIN)/bin/$(TOOLCHAIN_PREFIX)gcc
+AR := $(XTENSA_TOOCHAIN)/bin/$(TOOLCHAIN_PREFIX)ar
+LD := $(XTENSA_TOOCHAIN)/bin/$(TOOLCHAIN_PREFIX)gcc
 
 
 XTENSA_LIBS ?= $(shell $(CC) -print-sysroot)
+XTENSA_LIBS = $(XTENSA_TOOCHAIN)/include
 
-ESPTOOL ?= ../esptool/esptool
+ESPTOOL ?= sdk/esptool-ck/esptool.exe
 
-SDK_BASE ?= ../esp_iot_sdk_v0.9.3
+SDK_BASE ?= sdk/esp_iot_sdk_v0.9.3
 
 SDK_EXAMPLE_DIR := $(SDK_BASE)/examples/IoT_Demo
 
@@ -57,6 +58,8 @@ APP_FW_1 := $(BIN_DIR)/0x00000.bin
 APP_FW_2 := $(BIN_DIR)/0x40000.bin
 FULL_FW := $(BIN_DIR)/firmware.bin
 
+$(COMMON_OBJ_PATHS) $(TARGET_OBJ_PATHS) $(SDK_DRIVER_OBJ_PATHS): | get-tools
+
 
 $(APP_AR): $(COMMON_OBJ_PATHS) $(TARGET_OBJ_PATHS) $(SDK_DRIVER_OBJ_PATHS)
 	$(AR) cru $@ $^
@@ -66,10 +69,10 @@ $(APP_AR): | $(BIN_DIR)
 $(APP_OUT): $(APP_AR)
 	$(LD) -T$(LD_SCRIPT) $(LDFLAGS) -Wl,--start-group $(addprefix -l,$(LIBS)) $(APP_AR) -Wl,--end-group -o $@
 
-$(APP_FW_1): $(APP_OUT)
+$(APP_FW_1): $(APP_OUT) $(ESPTOOL)
 	$(ESPTOOL) -eo $(APP_OUT) -bo $@ -bs .text -bs .data -bs .rodata -bc -ec
 
-$(APP_FW_2): $(APP_OUT)
+$(APP_FW_2): $(APP_OUT) $(ESPTOOL)
 	$(ESPTOOL) -eo $(APP_OUT) -es .irom0.text $@ -ec
 
 $(FULL_FW): $(APP_FW_1) $(APP_FW_2)
@@ -81,9 +84,36 @@ firmware: $(APP_FW_1) $(APP_FW_2) $(FULL_FW)
 
 all: firmware
 
-clean-driver:
-	rm -r $(SDK_DRIVER_OBJ_PATHS)
+clean-sdk:
+	rm -rf sdk
 
-#clean:	clean-driver
+sdk:
+	mkdir.exe -p sdk
 
-.PHONY: all firmware
+sdk/xtensa-lx106-elf.7z:
+	wget --no-check-certificate -O sdk/xtensa-lx106-elf.7z https://github.com/williambernardet/esp8266-tools/raw/master/toolchain/xtensa-lx106-elf.7z
+
+$(CC): | sdk/xtensa-lx106-elf.7z
+	7za x -y -osdk sdk/xtensa-lx106-elf.7z
+
+sdk/esp_iot_sdk_v0.9.3_14_11_21.zip: | sdk
+	wget --no-check-certificate -O sdk/esp_iot_sdk_v0.9.3_14_11_21.zip https://github.com/williambernardet/esp8266-tools/raw/master/sdk/esp_iot_sdk_v0.9.3_14_11_21.zip
+
+sdk/esp_iot_sdk_v0.9.3_14_11_21_patch1.zip: | sdk
+	wget --no-check-certificate -O sdk/esp_iot_sdk_v0.9.3_14_11_21_patch1.zip https://github.com/williambernardet/esp8266-tools/raw/master/sdk/esp_iot_sdk_v0.9.3_14_11_21_patch1.zip
+
+sdk/esp_iot_sdk_v0.9.3: | sdk/esp_iot_sdk_v0.9.3_14_11_21.zip sdk/esp_iot_sdk_v0.9.3_14_11_21_patch1.zip
+	7za x -y -osdk sdk/esp_iot_sdk_v0.9.3_14_11_21.zip
+	7za x -y -osdk sdk/esp_iot_sdk_v0.9.3_14_11_21_patch1.zip
+	patch sdk/esp_iot_sdk_v0.9.3/include/c_types.h < target/esp8266/c_types.h.diff
+
+sdk/esptool-ck: | sdk
+	cd sdk && git clone https://github.com/igrr/esptool-ck
+
+$(ESPTOOL): | sdk/esptool-ck
+	cd sdk/esptool-ck && make all
+
+get-tools: sdk/esp_iot_sdk_v0.9.3 $(CC) $(ESPTOOL)
+	echo All Done...
+
+.PHONY: all firmware clean-sdk get-tools
